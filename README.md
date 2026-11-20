@@ -85,7 +85,19 @@ anything outside the roots and anything not in the scanned tree.
 Run it outside CPU quotas. Measured on kuhy's PC (16 threads, NVMe ext4,
 2.2 TB and 18.4 M entries on `/`, `/home` on the same filesystem):
 
-BENCH_RESULTS
+| Run (2026-11-20) | Cache | Wall-clock | Entries |
+| --- | --- | --- | --- |
+| 1 | partly cold (first run) | 22.6 s | 18.45 M |
+| 2 | dropped, then a few minutes of other load | 19.4 s | 18.40 M |
+| 3 | warm | 21.0 s | 17.75 M |
+| 4 | dropped right before (`drop_caches=3`) | 20.6 s | 17.75 M |
+
+Median about 20.7 s, range 19.4 to 22.6 s over 4 runs. Cold and warm runs
+take about the same time: the limit is kernel time in `getdents`/`fstatat`
+(about 270 of 300 CPU-seconds are system time), not disk reads. Peak RSS is
+about 1.7 GB. The biggest top-level folder, `/home`, came out at
+1,794,943,549,440 bytes against `du -x -s -B1` at 1,795,196,551,168
+(0.014 % apart; files changed between the two runs).
 
 ## Development
 
