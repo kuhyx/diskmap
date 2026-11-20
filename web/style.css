@@ -85,6 +85,8 @@ dialog ul { list-style: none; margin: 0; padding: 0; max-height: 60vh; overflow:
 dialog li { display: flex; gap: var(--s3); padding: var(--s1) 0; border-bottom: 1px solid var(--raised2); word-break: break-all; }
 dialog li .sz { margin-left: auto; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 dialog li.bad { color: var(--danger); }
+#rlist li { flex-direction: column; gap: var(--s1); }
+#rlist li .sz { margin-left: 0; white-space: normal; }
 dialog li.good { color: var(--success); }
 dialog .total { text-align: right; font-size: 20px; margin: var(--s3) 0; font-variant-numeric: tabular-nums; }
 dialog .actions { display: flex; justify-content: flex-end; gap: var(--s3); }

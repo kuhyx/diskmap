@@ -9,9 +9,11 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -163,6 +165,20 @@ func build(t *scan.Tree, e *scan.Entry, depth, limit int) *Node {
 	return n
 }
 
+// errText drops the paths Go wraps around a syscall error ("rename a b:
+// permission denied" -> "permission denied"); the UI already shows the path.
+func errText(err error) string {
+	var pe *fs.PathError
+	var le *os.LinkError
+	switch {
+	case errors.As(err, &le):
+		return le.Err.Error()
+	case errors.As(err, &pe):
+		return pe.Err.Error()
+	}
+	return err.Error()
+}
+
 // Result reports what happened to one path of a delete request.
 type Result struct {
 	Path  string `json:"path"`
@@ -219,7 +235,7 @@ func (s *Server) deleteOne(t *scan.Tree, p string, permanent bool) Result {
 	}
 	t.Refresh(p) // reflects a full or partial removal either way
 	if err != nil {
-		res.Error = err.Error()
+		res.Error = errText(err)
 		return res
 	}
 	res.OK = true

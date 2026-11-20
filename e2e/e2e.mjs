@@ -2,7 +2,8 @@
 // Usage: node e2e/e2e.mjs <diskmap-binary> <shots-dir>
 // Builds a scratch fixture under ~/.cache/diskmap-e2e, drives the real UI
 // (list, breadcrumb, treemap hover/click, selection, cancel, trash,
-// permanent delete, partial failure) and saves screenshots. Items it trashes
+// permanent delete, partial failure) and saves screenshots. CHROME=<path>
+// picks the browser binary (default /usr/bin/chromium). Items it trashes
 // are removed from ~/.local/share/Trash again at the end. Exit 0 = all pass.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -38,7 +39,10 @@ const check = (name, ok, detail = "") => {
 const port = 18000 + (stamp % 1000);
 const dm = spawn(bin, ["--root", root, "--port", String(port), "--no-browser"], { stdio: ["ignore", "pipe", "inherit"] });
 const url = await new Promise((res) => dm.stdout.once("data", (d) => res(d.toString().trim())));
-const chrome = spawn("/usr/bin/chromium", [
+console.error(`[e2e] diskmap at ${url}`);
+const chromeBin = process.env.CHROME || "/usr/bin/chromium";
+const log = (m) => console.error(`[e2e] ${m}`);
+const chrome = spawn(chromeBin, [
   "--headless=new", "--remote-debugging-port=0", `--user-data-dir=${path.join(os.tmpdir(), `dm-e2e-${stamp}`)}`,
   "--window-size=1600,1000", "--no-first-run", "--disable-extensions", "about:blank",
 ], { stdio: ["ignore", "ignore", "pipe"] });
@@ -51,6 +55,7 @@ const wsUrl = await new Promise((res) => {
   });
 });
 
+log(`devtools ${wsUrl}`);
 const browser = new WebSocket(wsUrl);
 await new Promise((r) => (browser.onopen = r));
 let id = 0;
@@ -76,7 +81,7 @@ const evalJS = async (expr) => {
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const waitFor = async (expr, ms = 10000) => {
-  for (let t = 0; t < ms; t += 100) { if (await evalJS(expr)) return true; await sleep(100); }
+  for (let t = 0; t < ms; t += 100) { if (await evalJS(expr).catch(() => false)) return true; await sleep(100); }
   return false;
 };
 const shot = async (name) => {
