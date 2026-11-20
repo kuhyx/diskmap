@@ -102,6 +102,8 @@ try {
 
   const sizes = await evalJS(`[...document.querySelectorAll('#rows tr[data-path]')].map(r => r.querySelector('.size').textContent)`);
   const paths = await rowPaths();
+  const bars = await evalJS(`[...document.querySelectorAll('#rows td.bar .track > div')].map(d => d.getBoundingClientRect().width)`);
+  check("C4 size bars proportional", bars[0] > 100 && Math.abs(bars[1] / bars[0] - 1949696 / 7892992) < 0.05, JSON.stringify(bars));
   check("C4 list biggest first", paths[0] === path.join(root, "videos") && paths[1] === path.join(root, photos), JSON.stringify(sizes));
 
   await evalJS(`document.querySelector('#rows tr[data-path="${path.join(root, "videos")}"]').click(), true`);

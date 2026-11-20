@@ -61,7 +61,8 @@ td.chk { width: 40px; text-align: center; }
 td.chk input { width: 20px; height: 20px; accent-color: var(--accent); cursor: pointer; }
 td.size { text-align: right; font-variant-numeric: tabular-nums; width: 110px; }
 td.bar { width: 120px; }
-td.bar div { height: 10px; border-radius: 3px; background: var(--accent); min-width: 1px; }
+td.bar .track { width: 120px; }
+td.bar .track div { height: 10px; border-radius: 3px; background: var(--accent); min-width: 1px; }
 td.name { overflow: hidden; text-overflow: ellipsis; max-width: 0; width: 100%; }
 td.name svg { width: 18px; height: 18px; vertical-align: -3px; margin-right: var(--s2); fill: var(--muted); }
 td.name .dir { fill: var(--accent); }

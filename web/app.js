@@ -114,7 +114,7 @@ function renderList(node) {
     const cells = [
       ["chk", chk],
       ["size", fmtBytes(k.size)],
-      ["bar", `<div style="width:${Math.max(0.5, (100 * k.size) / max)}%"></div>`],
+      ["bar", `<div class="track"><div style="width:${Math.max(0.5, (100 * k.size) / max)}%"></div></div>`],
       ["name", (k.dir ? ICON_DIR : ICON_FILE) + (k.err ? ICON_LOCK : "")],
       ["count", k.dir ? fmtNum(k.count) : ""],
     ];
