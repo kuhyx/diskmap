@@ -48,6 +48,13 @@ diskmap --root ~/Downloads    # scan one folder
   - The close button cancels; nothing is touched.
   - Afterwards a result list marks each path ✓ or ⚠ with the error. One
     failure never stops the other items. The tree updates from disk.
+  - **Root-owned paths:** when an item fails with permission denied, the
+    dialog turns red and shows a shield: the path, a red trash-can-with-X
+    (permanent, no undo) and, if pacman owns the path or a direct child, a
+    warning triangle (prefer `pacman -R`). The shield button runs
+    `pkexec /usr/bin/rm -rf --one-file-system -- <path>`, so polkit asks for
+    your password. Dismissing that prompt or the dialog changes nothing.
+    diskmap itself never runs as root and never falls back to sudo.
 
 ## Trash vs permanent
 
@@ -73,7 +80,14 @@ and count only their own block. With the default flags the result matches
 The server listens on 127.0.0.1 only. Every request needs a loopback `Host`
 header (blocks DNS rebinding), API calls need a random per-run token, and
 delete requests reject foreign `Origin` headers. Delete refuses a scan root,
-anything outside the roots and anything not in the scanned tree.
+anything outside the roots and anything not in the scanned tree. It also
+refuses these folders themselves (their contents stay deletable): `/`,
+`/usr`, `/etc`, `/boot`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/var`, `/home`,
+`/root`, `/opt`, `/srv`, `/dev`, `/proc`, `/sys`, `/run`, `/tmp` and your
+home. Before the root delete, diskmap resolves the path's parent folders
+(never the item itself, so a symlink is removed as a link) and checks the
+resolved path against the same list. `DISKMAP_PKEXEC` swaps in another
+pkexec binary; the e2e test uses it so no real prompt opens.
 
 ## Benchmark
 
@@ -104,4 +118,5 @@ about 1.7 GB. The biggest top-level folder, `/home`, came out at
 ```sh
 scripts/check.sh                         # gofmt, vet, go test -race, selftest
 go build -o /tmp/diskmap . && node e2e/e2e.mjs /tmp/diskmap shots/   # UI end-to-end in headless chromium
+scripts/vm_elevate.sh                    # real pkexec root delete in a vmbox guest
 ```
