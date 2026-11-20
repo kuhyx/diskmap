@@ -27,8 +27,30 @@ mk("videos/a.mkv", 4000); mk("videos/b.mkv", 2500); mk("videos/clips/c.mp4", 120
 const photos = `photos-${stamp}`;
 mk(`${photos}/x.jpg`, 900); mk(`${photos}/y.jpg`, 700); mk(`${photos}/z.png`, 300);
 mk(`trash-me-${stamp}.bin`, 600); mk(`perm-me-${stamp}.bin`, 500);
-mk("locked/stuck.bin", 400); mk(`ok-${stamp}.bin`, 200);
+mk("locked/stuck.bin", 400); mk("locked/pkgfile.bin", 50); mk(`ok-${stamp}.bin`, 200); mk(`vanish-${stamp}.bin`, 100);
 fs.chmodSync(path.join(root, "locked"), 0o555);
+
+// Stand-in for pkexec so no real polkit prompt ever opens: it logs its argv
+// and then acts per the mode file (cancel = 126, noagent = 127, ok = run).
+const fakeDir = path.join(os.tmpdir(), `dm-e2e-pk-${stamp}`);
+fs.mkdirSync(fakeDir, { recursive: true });
+const pkMode = path.join(fakeDir, "mode"), pkLog = path.join(fakeDir, "argv");
+const fakePk = path.join(fakeDir, "pkexec");
+fs.writeFileSync(fakePk, `#!/bin/sh
+printf '%s\\n' "$@" > '${pkLog}'
+case "$(cat '${pkMode}')" in
+  cancel) exit 126 ;;
+  noagent) echo 'Error executing command as another user: No authentication agent found.' >&2; exit 127 ;;
+esac
+for a; do last=$a; done
+chmod u+w "$(dirname "$last")"
+exec "$@"
+`, { mode: 0o755 });
+// Stand-in pacman: owns only paths named pkgfile.bin (prints a package name
+// per owned argument, like pacman -Qqo).
+fs.writeFileSync(path.join(fakeDir, "pacman"), `#!/bin/sh
+for a; do case "$a" in */pkgfile.bin) echo fakepkg ;; esac; done
+`, { mode: 0o755 });
 
 const results = [];
 const check = (name, ok, detail = "") => {
@@ -37,7 +59,9 @@ const check = (name, ok, detail = "") => {
 };
 
 const port = 18000 + (stamp % 1000);
-const dm = spawn(bin, ["--root", root, "--port", String(port), "--no-browser"], { stdio: ["ignore", "pipe", "inherit"] });
+const dm = spawn(bin, ["--root", root, "--port", String(port), "--no-browser"], {
+  stdio: ["ignore", "pipe", "inherit"], env: { ...process.env, DISKMAP_PKEXEC: fakePk, PATH: `${fakeDir}:${process.env.PATH}` },
+});
 const url = await new Promise((res) => dm.stdout.once("data", (d) => res(d.toString().trim())));
 console.error(`[e2e] diskmap at ${url}`);
 const chromeBin = process.env.CHROME || "/usr/bin/chromium";
@@ -158,6 +182,7 @@ try {
   const inTrash = exists(path.join(trashFiles, path.basename(tName))) && fs.existsSync(path.join(trashInfo, `${path.basename(tName)}.trashinfo`))
     && fs.readFileSync(path.join(trashInfo, `${path.basename(tName)}.trashinfo`), "utf8").includes(`Path=${tName}`);
   check("C9 trash: gone from list, in ~/.local/share/Trash with trashinfo", gone && !exists(tName) && inTrash);
+  check("S10 own file: no shield state", !(await evalJS(`document.getElementById('confirm').classList.contains('shield')`)));
 
   // Permanent: first press arms, second deletes.
   const pName = path.join(root, `perm-me-${stamp}.bin`);
@@ -172,21 +197,95 @@ try {
   await clickSel("#rclose");
   check("C10 permanent needs second press; gone and not in trash", armed && stillThere && !exists(pName) && !exists(path.join(trashFiles, path.basename(pName))));
 
-  // Partial failure.
-  await evalJS(`document.querySelector('#rows tr[data-path="${path.join(root, "locked")}"]').click(), true`);
-  await waitFor(`document.body.dataset.path === ${JSON.stringify(path.join(root, "locked"))}`);
-  await sel(path.join(root, "locked", "stuck.bin"));
+  // Permission denied -> shield state -> elevated delete via (fake) pkexec.
+  const stuck = path.join(root, "locked", "stuck.bin");
+  const openLocked = async () => {
+    await evalJS(`document.querySelector('#rows tr[data-path="${path.join(root, "locked")}"]').click(), true`);
+    await waitFor(`document.body.dataset.path === ${JSON.stringify(path.join(root, "locked"))}`);
+  };
+  const shieldOpen = `document.getElementById('confirm').open && document.getElementById('confirm').classList.contains('shield')`;
+  await openLocked();
+  await sel(stuck);
+  await clickSel("#del");
+  await clickSel("#dotrash");
+  const shield1 = await waitFor(shieldOpen, 5000);
+  const dlgText = await evalJS(`document.getElementById('confirm').innerText.trim()`);
+  const vis = (id) => `(() => { const e = document.getElementById('${id}'); return !!e && e.getBoundingClientRect().width > 0; })()`;
+  const icons = await evalJS(`[${vis("elevate")}, ${vis("rmx")}, ${vis("dotrash")}, ${vis("perm")}, document.querySelectorAll('#clist .owned').length]`);
+  await shot("s1-shield");
+  check("S1 permission denied flips the dialog to the shield state, item kept",
+    shield1 && exists(stuck) && (await rowPaths()).includes(stuck), JSON.stringify(dlgText));
+  check("S2 shield: path is the only text; shield + red rm glyph; trash/fire hidden",
+    dlgText === stuck && icons[0] && icons[1] && !icons[2] && !icons[3], JSON.stringify(icons));
+  check("S6 unowned path: no owned icon", icons[4] === 0);
+  check("S3 nothing deleted before the second press", !fs.existsSync(pkLog));
+
+  fs.writeFileSync(pkMode, "cancel");
+  await clickSel("#elevate");
+  await waitFor(`!document.getElementById('confirm').open`);
+  await sleep(300);
+  check("S4 polkit cancel: dialog closes, nothing else, item still listed",
+    !(await evalJS(`document.getElementById('results').open || document.getElementById('confirm').open`)) && exists(stuck) && (await rowPaths()).includes(stuck));
+
+  const pkgfile = path.join(root, "locked", "pkgfile.bin");
+  await clickSel("#clear");
+  await sel(pkgfile);
+  await clickSel("#del");
+  await clickSel("#dotrash");
+  await waitFor(shieldOpen, 5000);
+  const owned = await evalJS(`[...document.querySelectorAll('#clist .owned')].map(e => e.getBoundingClientRect().width)`);
+  const ownedText = await evalJS(`document.getElementById('confirm').innerText.trim()`);
+  await shot("s5-owned");
+  await clickSel("#cancel");
+  await sleep(300);
+  check("S5 pacman-owned path: warning icon only, cancel button closes silently",
+    owned.length === 1 && owned[0] > 0 && ownedText === pkgfile && exists(pkgfile)
+    && !(await evalJS(`document.getElementById('results').open || document.getElementById('confirm').open`)), JSON.stringify([owned, ownedText]));
+  await clickSel("#clear");
+  await sel(stuck);
+
+  fs.writeFileSync(pkMode, "noagent");
+  await clickSel("#del");
+  await clickSel("#dotrash");
+  await waitFor(shieldOpen, 5000);
+  await clickSel("#elevate");
+  await waitFor(`document.getElementById('results').open`);
+  const na = await evalJS(`[...document.querySelectorAll('#rlist li')].map(l => [l.dataset.ok, l.title])`);
+  await shot("s9-no-agent");
+  check("S9 no agent: error icon with raw error in tooltip", na.length === 1 && na[0][0] === "0" && na[0][1].includes("No authentication agent"), JSON.stringify(na));
+  await clickSel("#rclose");
+
+  fs.writeFileSync(pkMode, "ok");
+  const lockedBefore = await evalJS(`fetch('/api/tree?depth=0&path=${encodeURIComponent(path.join(root, "locked"))}', {headers: {'X-Token': window.DISKMAP_TOKEN}}).then(r => r.json()).then(n => n.size)`);
+  await clickSel("#del");
+  await clickSel("#perm");
+  await clickSel("#perm");
+  await waitFor(shieldOpen, 5000);
+  await clickSel("#elevate");
+  await waitFor(`document.getElementById('results').open`);
+  await shot("s3-elevated-done");
+  await clickSel("#rclose");
+  await waitFor(`!document.querySelector('#rows tr[data-path="${stuck}"]')`);
+  const lockedAfter = await evalJS(`fetch('/api/tree?depth=0&path=${encodeURIComponent(path.join(root, "locked"))}', {headers: {'X-Token': window.DISKMAP_TOKEN}}).then(r => r.json()).then(n => n.size)`);
+  const argv = fs.readFileSync(pkLog, "utf8");
+  check("S3 shield ✓ runs pkexec rm, item gone, parent size reduced",
+    !exists(stuck) && argv === `/usr/bin/rm\n-rf\n--one-file-system\n--\n${stuck}\n` && lockedAfter < lockedBefore, JSON.stringify([argv, lockedBefore, lockedAfter]));
   await evalJS(`document.querySelector('#crumbs button[data-path="${root}"]').click(), true`);
   await waitFor(`document.body.dataset.path === ${JSON.stringify(root)}`);
-  await sel(okName);
+
+  // Partial failure that is not permission denied: no shield.
+  const vName = path.join(root, `vanish-${stamp}.bin`);
+  await sel(vName); await sel(okName);
+  fs.rmSync(vName);
   await clickSel("#del");
   await clickSel("#dotrash");
   await waitFor(`document.getElementById('results').open`);
   const rs = await evalJS(`[...document.querySelectorAll('#rlist li')].map(l => l.dataset.ok + ' ' + l.textContent)`);
   await shot("c11-partial-failure");
-  check("C11 failing item reported, other item handled",
-    rs.some((r) => r.startsWith("0") && r.includes("stuck.bin")) && rs.some((r) => r.startsWith("1") && r.includes(path.basename(okName)))
-    && exists(path.join(root, "locked", "stuck.bin")) && !exists(okName), JSON.stringify(rs));
+  check("C11 non-permission failure: error icon, no shield; other item handled",
+    !(await evalJS(`document.getElementById('confirm').open`))
+    && rs.some((r) => r.startsWith("0") && r.includes(path.basename(vName))) && rs.some((r) => r.startsWith("1") && r.includes(path.basename(okName)))
+    && !exists(okName), JSON.stringify(rs));
   await clickSel("#rclose");
 
   const errs = await evalJS(`document.body.innerText.includes('[object Object]') || document.body.innerText.includes('undefined')`);
@@ -201,6 +300,7 @@ try {
   }
   fs.chmodSync(path.join(root, "locked"), 0o755);
   fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(fakeDir, { recursive: true, force: true });
   browser.close();
   chrome.kill();
   dm.kill();

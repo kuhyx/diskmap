@@ -317,7 +317,7 @@ function topLevelSelection() {
 
 function openConfirm() {
   const dlg = $("confirm");
-  dlg.classList.remove("armed");
+  dlg.classList.remove("armed", "shield");
   const ul = $("clist");
   ul.replaceChildren();
   let total = 0;
@@ -334,10 +334,51 @@ function openConfirm() {
   dlg.showModal();
 }
 
+const ICON_OWNED = '<svg class="owned" viewBox="0 0 24 24" role="img" aria-label="Owned by a package"><path d="M1 21h22L12 2zm12-3h-2v-2h2zm0-4h-2v-4h2z"/></svg>';
+
 async function doDelete(permanent) {
   const paths = topLevelSelection();
   $("confirm").close();
   const res = await api("/api/delete", { method: "POST", body: JSON.stringify({ paths, permanent }) });
+  const denied = res.filter((r) => r.needs_root);
+  const rest = res.filter((r) => !r.needs_root);
+  if (denied.length) openShield(denied, rest);
+  else await showResults(rest);
+}
+
+// Shield state: the unprivileged attempt hit permission denied. Only a
+// second ✓ here runs the root delete (permanent, via polkit).
+function openShield(denied, rest) {
+  const dlg = $("confirm");
+  dlg.classList.remove("armed");
+  dlg.classList.add("shield");
+  state.shield = { paths: denied.map((r) => r.path), rest };
+  const ul = $("clist");
+  ul.replaceChildren();
+  for (const r of denied) {
+    const li = document.createElement("li");
+    li.append(r.path);
+    if (r.owned) li.insertAdjacentHTML("beforeend", ICON_OWNED);
+    ul.append(li);
+  }
+  dlg.showModal();
+}
+
+async function closeShield(elevate) {
+  const sh = state.shield;
+  state.shield = null;
+  $("confirm").close();
+  let res = sh.rest;
+  if (elevate) {
+    const out = await api("/api/delete", { method: "POST", body: JSON.stringify({ paths: sh.paths, permanent: true, elevate: true }) });
+    res = res.concat(out.filter((r) => !r.cancelled));
+  }
+  if (res.length) await showResults(res, sh.paths);
+  else await render();
+}
+
+// keep: paths that stay selected even without a failure (a dismissed prompt).
+async function showResults(res, keep = []) {
   const ul = $("rlist");
   ul.replaceChildren();
   state.failed.clear();
@@ -347,6 +388,7 @@ async function doDelete(permanent) {
     li.dataset.ok = r.ok ? "1" : "0";
     li.append(r.ok ? "✓ " : "⚠ ", r.path);
     if (!r.ok) {
+      li.title = r.error;
       const e = document.createElement("span");
       e.className = "sz";
       e.textContent = r.error;
@@ -357,7 +399,7 @@ async function doDelete(permanent) {
     }
     ul.append(li);
   }
-  for (const p of [...state.sel.keys()]) if (!state.failed.has(p)) state.sel.delete(p);
+  for (const p of [...state.sel.keys()]) if (!state.failed.has(p) && !keep.includes(p)) state.sel.delete(p);
   syncSel();
   const dlg = $("results");
   dlg.showModal();
@@ -368,7 +410,10 @@ async function doDelete(permanent) {
 function setupDelete() {
   $("del").onclick = openConfirm;
   $("clear").onclick = () => { state.sel.clear(); syncSel(); };
-  $("cancel").onclick = () => $("confirm").close();
+  $("cancel").onclick = () => (state.shield ? closeShield(false) : $("confirm").close());
+  // Escape closes the dialog too; in the shield state route it like cancel.
+  $("confirm").addEventListener("cancel", (ev) => { if (state.shield) { ev.preventDefault(); closeShield(false); } });
+  $("elevate").onclick = () => closeShield(true);
   $("dotrash").onclick = () => doDelete(false);
   $("perm").onclick = () => {
     const dlg = $("confirm");

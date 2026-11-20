@@ -27,11 +27,18 @@ type Server struct {
 	scanner *scan.Scanner
 	token   string
 	web     fs.FS
+	// elevate deletes one resolved path as root; owner reports pacman
+	// ownership. Both are swapped out in tests.
+	elevate func(path string) error
+	owner   func(path string) bool
 }
 
 // New starts scanning in the background and returns the server.
 func New(opts scan.Options, token string, web fs.FS) *Server {
-	return &Server{scanner: scan.Start(opts), token: token, web: web}
+	return &Server{
+		scanner: scan.Start(opts), token: token, web: web,
+		elevate: pkexecElevator(defaultPkexec()), owner: pacmanOwned,
+	}
 }
 
 // Wait blocks until the scan has finished.
@@ -184,6 +191,12 @@ type Result struct {
 	Path  string `json:"path"`
 	OK    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
+	// NeedsRoot: the unprivileged attempt hit EACCES/EPERM; the UI may ask
+	// again with elevate. Owned: pacman owns the path (a hint, never a block).
+	NeedsRoot bool `json:"needs_root,omitempty"`
+	Owned     bool `json:"owned,omitempty"`
+	// Cancelled: the polkit prompt was dismissed; nothing to report.
+	Cancelled bool `json:"cancelled,omitempty"`
 }
 
 func (s *Server) deleteHandler(w http.ResponseWriter, r *http.Request) {
@@ -195,6 +208,7 @@ func (s *Server) deleteHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Paths     []string `json:"paths"`
 		Permanent bool     `json:"permanent"`
+		Elevate   bool     `json:"elevate"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -202,14 +216,15 @@ func (s *Server) deleteHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]Result, 0, len(req.Paths))
 	for _, p := range req.Paths {
-		out = append(out, s.deleteOne(t, p, req.Permanent))
+		out = append(out, s.deleteOne(t, p, req.Permanent, req.Elevate))
 	}
 	writeJSON(w, out)
 }
 
 // deleteOne handles one path; each path is independent, so one failure
-// never stops the rest.
-func (s *Server) deleteOne(t *scan.Tree, p string, permanent bool) Result {
+// never stops the rest. elevate (permanent only) skips the unprivileged
+// attempt and runs the root delete on the resolved path.
+func (s *Server) deleteOne(t *scan.Tree, p string, permanent, elevate bool) Result {
 	res := Result{Path: p}
 	if !filepath.IsAbs(p) || filepath.Clean(p) != p {
 		res.Error = "path must be absolute and clean"
@@ -223,9 +238,15 @@ func (s *Server) deleteOne(t *scan.Tree, p string, permanent bool) Result {
 	case root == p:
 		res.Error = "refusing to delete a scan root"
 		return res
+	case isProtected(p):
+		res.Error = "refusing to delete a protected path"
+		return res
 	case t.Lookup(p) == nil:
 		res.Error = "not in the scanned tree"
 		return res
+	}
+	if elevate {
+		return s.deleteElevated(t, res, permanent)
 	}
 	var err error
 	if permanent {
@@ -236,8 +257,36 @@ func (s *Server) deleteOne(t *scan.Tree, p string, permanent bool) Result {
 	t.Refresh(p) // reflects a full or partial removal either way
 	if err != nil {
 		res.Error = errText(err)
+		if errors.Is(err, fs.ErrPermission) {
+			res.NeedsRoot = true
+			res.Owned = s.owner(p)
+		}
 		return res
 	}
 	res.OK = true
+	return res
+}
+
+// deleteElevated runs the root delete for an already-guarded path.
+func (s *Server) deleteElevated(t *scan.Tree, res Result, permanent bool) Result {
+	if !permanent {
+		res.Error = "elevated delete must be permanent"
+		return res
+	}
+	real, err := resolveElevated(res.Path)
+	if err != nil {
+		res.Error = errText(err)
+		return res
+	}
+	err = s.elevate(real)
+	t.Refresh(res.Path) // the tree path, not the resolved one
+	switch {
+	case errors.Is(err, errCancelled):
+		res.Cancelled = true
+	case err != nil:
+		res.Error = err.Error()
+	default:
+		res.OK = true
+	}
 	return res
 }

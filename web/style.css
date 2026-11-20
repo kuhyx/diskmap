@@ -95,6 +95,12 @@ dialog.armed { border-color: var(--danger); box-shadow: 0 0 0 3px var(--danger);
 dialog.armed #perm { background: var(--danger); }
 dialog.armed #perm svg { fill: var(--ink); }
 dialog.armed #dotrash { display: none; }
+#confirm .glyph, #elevate, #confirm li .owned { display: none; }
+#confirm.shield { border-color: var(--danger); box-shadow: 0 0 0 3px var(--danger); }
+#confirm.shield .glyph { display: block; width: 48px; height: 48px; fill: var(--danger); margin: 0 auto var(--s3); }
+#confirm.shield #elevate { display: inline-grid; }
+#confirm.shield li .owned { display: inline-block; width: 22px; height: 22px; fill: var(--accent); flex: none; margin-left: auto; }
+#confirm.shield .total, #confirm.shield li .sz, #confirm.shield #perm, #confirm.shield #dotrash { display: none; }
 .shake { animation: shake .3s; }
 @keyframes shake { 25% { transform: translateX(-6px); } 75% { transform: translateX(6px); } }
 
