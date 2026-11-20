@@ -233,3 +233,24 @@ func TestProtectedRefusedForTrash(t *testing.T) {
 		}
 	}
 }
+
+// A protected path inside the scan (here: $HOME) is refused for trash and
+// permanent delete alike, while its children stay deletable.
+func TestProtectedRefusedInsideScan(t *testing.T) {
+	s, root := newServer(t)
+	home := filepath.Join(root, "a")
+	t.Setenv("HOME", home)
+	for _, perm := range []bool{false, true} {
+		res := post(t, s, map[string]any{"paths": []string{home}, "permanent": perm})
+		if res[0].OK || res[0].Error != "refusing to delete a protected path" {
+			t.Fatalf("permanent=%v: %+v", perm, res)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, "f1")); err != nil {
+		t.Fatal("protected dir touched")
+	}
+	res := post(t, s, map[string]any{"paths": []string{filepath.Join(home, "f1")}, "permanent": true})
+	if !res[0].OK {
+		t.Fatalf("child refused: %+v", res)
+	}
+}
