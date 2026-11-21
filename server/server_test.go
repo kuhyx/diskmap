@@ -28,7 +28,10 @@ func newServer(t *testing.T) (*Server, string) {
 			t.Fatal(err)
 		}
 	}
-	web := fstest.MapFS{"index.html": {Data: []byte("<html>{{TOKEN}}</html>")}}
+	web := fstest.MapFS{
+		"index.html":                        {Data: []byte("<html>{{TOKEN}}</html>")},
+		"vendor/kuhy-credit/kuhy-credit.js": {Data: []byte("export {}")},
+	}
 	s := New(scan.Options{Roots: []string{root}}, tok, web)
 	s.Wait()
 	return s, root
@@ -153,5 +156,17 @@ func TestTreeDepth(t *testing.T) {
 	}
 	if n.Path != root || len(n.Kids) != 3 || n.Kids[0].Name != "a" || len(n.Kids[0].Kids) != 2 {
 		t.Fatalf("bad tree %+v", n)
+	}
+}
+
+func TestVendorKuhyCreditServes(t *testing.T) {
+	s, _ := newServer(t)
+	rec := do(s, "GET", "/vendor/kuhy-credit/kuhy-credit.js", "", nil)
+	if rec.Code != 200 {
+		t.Fatalf("vendor kuhy-credit.js: %d", rec.Code)
+	}
+	ct := rec.Header().Get("Content-Type")
+	if !strings.Contains(ct, "javascript") && !strings.Contains(ct, "module") {
+		t.Fatalf("unexpected content-type: %s", ct)
 	}
 }
